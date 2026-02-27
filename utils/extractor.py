@@ -1,4 +1,3 @@
-
 import re
 import easyocr
 import cv2
@@ -66,17 +65,24 @@ class InvoiceExtractor:
         """
         Extract GSTIN using flexible regex.
         """
-
-        # Remove spaces (OCR may split GSTIN)
-        cleaned_text = text.replace(" ", "")
-
-        gstin_pattern = r'\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]'
-
-        match = re.search(gstin_pattern, cleaned_text)
-
-        if match:
-            return match.group()
-
+        # Remove spaces and handle OCR errors
+        cleaned_text = text.replace(" ", "").replace("O", "0").replace("I", "1").replace("S", "5")
+        
+        # GSTIN pattern - more flexible
+        gstin_patterns = [
+            r'\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]',  # Standard
+            r'GSTIN[:\s]*(\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d])',  # With GSTIN prefix
+            r'(\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d])'  # Standalone
+        ]
+        
+        for pattern in gstin_patterns:
+            match = re.search(pattern, cleaned_text)
+            if match:
+                gstin = match.group(1) if match.groups() else match.group()
+                # Validate and return
+                if len(gstin) == 15:
+                    return gstin
+        
         return None
 
     # ---------------- DATE EXTRACTION ----------------
@@ -84,18 +90,22 @@ class InvoiceExtractor:
         """
         Extract invoice date supporting multiple formats.
         """
-
         date_patterns = [
-            r'\b\d{1,2}\s*[-/]\s*[A-Z]{3}\s*[-/]\s*\d{4}\b',   # 23 - JAN - 2025
-            r'\b\d{1,2}\s*[-/]\s*\d{1,2}\s*[-/]\s*\d{4}\b',    # 23-01-2025
-            r'\b\d{2}/\d{2}/\d{4}\b'
+            r'DATE[:\s]*(\d{1,2}\s*[-/]\s*[A-Z]{3,}\s*[-/]\s*\d{4})',  # DATE: 23-JAN-2025
+            r'\b(\d{1,2}\s*[-/]\s*[A-Z]{3,}\s*[-/]\s*\d{4})\b',      # 23-JAN-2025
+            r'\b(\d{1,2}\s*[-/]\s*\d{1,2}\s*[-/]\s*\d{4})\b',       # 23-01-2025
+            r'\b(\d{2}/\d{2}/\d{4})\b'                               # 23/01/2025
         ]
-
+        
         for pattern in date_patterns:
-            match = re.search(pattern, text)
+            match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                return match.group()
-
+                date = match.group(1) if match.groups() else match.group()
+                # Clean up the date format
+                date = re.sub(r'\s+', '', date)  # Remove extra spaces
+                date = re.sub(r'-+', '-', date)  # Fix multiple dashes
+                return date.upper()
+        
         return None
 
     # ---------------- TOTAL AMOUNT EXTRACTION ----------------
@@ -103,26 +113,37 @@ class InvoiceExtractor:
         """
         Extract total invoice amount intelligently.
         """
-
         # Look for TOTAL keyword first
-        total_match = re.search(r'(TOTAL|GRANDTOTAL|GRAND TOTAL).*?([\d,]+\.\d{2})', text)
-
-        if total_match:
-            try:
-                return float(total_match.group(2).replace(',', ''))
-            except:
-                pass
-
-        # Fallback: extract all decimal numbers and return max
+        total_patterns = [
+            r'(TOTAL|GRAND\s*TOTAL|GRAND\s*TOTAL).*?([\d,]+\.\d{2})',
+            r'AMOUNT.*?([\d,]+\.\d{2})',
+            r'₹\s*([\d,]+\.\d{2})',
+            r'RS\s*([\d,]+\.\d{2})',
+            r'INR\s*([\d,]+\.\d{2})'
+        ]
+        
+        for pattern in total_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    amount_str = match.group(2) if match.groups() and len(match.groups()) > 1 else match.group(1)
+                    amount = float(amount_str.replace(',', ''))
+                    # Filter out very small amounts (likely not totals)
+                    if amount > 10:
+                        return amount
+                except:
+                    continue
+        
+        # Fallback: extract all decimal numbers and return the largest reasonable one
         numbers = re.findall(r'[\d,]+\.\d{2}', text)
-
         if numbers:
             try:
-                amounts = [float(n.replace(',', '')) for n in numbers]
-                return max(amounts)
+                amounts = [float(n.replace(',', '')) for n in numbers if float(n.replace(',', '')) > 10]
+                if amounts:
+                    return max(amounts)
             except:
                 pass
-
+        
         return None
 
     # ---------------- MAIN EXTRACTION FUNCTION ----------------
@@ -130,12 +151,24 @@ class InvoiceExtractor:
         """
         Extract all invoice information.
         """
-
         extracted_text = self.extract_text(image_path)
-
+        
+        # Debug: Print extracted text
+        print("🔍 DEBUG - Extracted Text:")
+        print("=" * 50)
+        print(extracted_text)
+        print("=" * 50)
+        
         gstin = self.extract_gstin(extracted_text)
         invoice_date = self.extract_invoice_date(extracted_text)
         total_amount = self.extract_total_amount(extracted_text)
+        
+        # Debug: Print extraction results
+        print("📊 EXTRACTION RESULTS:")
+        print(f"GSTIN: {gstin}")
+        print(f"Date: {invoice_date}")
+        print(f"Amount: {total_amount}")
+        print("=" * 50)
 
         return {
             "extracted_text": extracted_text,
