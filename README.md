@@ -1,65 +1,133 @@
 # AI GST Filing Agent for Kirana Stores
 
-A Micro-SaaS application that automates GST invoice processing for small businesses using AI and OCR technology.
+A modern Micro-SaaS application that automates GST invoice processing for small businesses using AI and OCR technology with a beautiful React frontend.
 
 ## Features
 
-- 📤 **Invoice Upload**: Upload invoice images (JPG/PNG)
-- 🔍 **OCR Extraction**: Uses EasyOCR to extract text from invoices
-- 🧾 **GST Information Extraction**: Automatically extracts:
-  - GSTIN (using regex validation)
+- 📤 **Modern Invoice Upload**: Drag & drop interface with image preview
+- 🔍 **AI-Powered OCR**: Uses EasyOCR to extract text from invoices
+- 🧾 **Smart GST Extraction**: Automatically extracts:
+  - GSTIN (with regex validation)
   - Invoice date
   - Total invoice amount
-- 💰 **GST Tax Calculation**: 
+- 💰 **Intelligent GST Calculation**: 
   - Applies 18% standard GST rate
   - For Andhra Pradesh (state code 37): CGST 9% + SGST 9%
   - For other states: IGST 18%
-- 📊 **GSTR-1 Generation**: Creates draft CSV with required columns:
-  - GSTIN/UIN of Recipient
-  - Invoice Date
-  - Invoice Value
-  - Place of Supply
-  - Reverse Charge
-  - Invoice Type
-- 💾 **CSV Export**: Download GSTR-1 ready CSV file
+- 📊 **Beautiful Dashboard**: Modern React UI with real-time results
+- 📋 **GSTR-1 Generation**: Creates draft CSV with required columns
+- 💾 **One-Click CSV Export**: Download GSTR-1 ready CSV file
 
-## Project Structure
+## Architecture
 
 ```
 Micro-SaaS-GST-Filing-Agent/
-├── app.py                 # Main Streamlit application
+├── api_server.py          # Flask REST API server
+├── app.py                 # Original Streamlit app (backup)
+├── start.py              # Unified startup script
 ├── requirements.txt       # Python dependencies
-├── README.md             # Project documentation
-└── utils/
-    ├── extractor.py      # OCR and text extraction logic
-    └── gst_logic.py      # GST validation and calculation logic
+├── frontend/             # React frontend application
+│   ├── src/
+│   │   ├── components/   # React components
+│   │   ├── App.js       # Main app component
+│   │   └── index.js     # Entry point
+│   ├── public/
+│   └── package.json     # Node.js dependencies
+├── utils/
+│   ├── extractor.py      # OCR and text extraction logic
+│   └── gst_logic.py      # GST validation and calculation logic
+└── README.md             # This file
 ```
 
-## Installation
+## Quick Start
 
-1. Clone the repository:
+### Prerequisites
+- Python 3.8+
+- Node.js 14+
+- npm or yarn
+
+### Installation
+
+1. **Clone the repository:**
 ```bash
 git clone <repository-url>
 cd Micro-SaaS-GST-Filing-Agent
 ```
 
-2. Install dependencies:
+2. **Install Python dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+3. **Install frontend dependencies:**
+```bash
+cd frontend
+npm install
+cd ..
+```
 
-1. Run the Streamlit application:
+### Running the Application
+
+#### Option 1: Easy Start (Recommended)
+```bash
+python start.py
+```
+This will automatically:
+- Start the Flask API server (port 5000)
+- Start the React frontend (port 3000)
+- Open your browser to `http://localhost:3000`
+
+#### Option 2: Manual Start
+```bash
+# Terminal 1: Start API server
+python api_server.py
+
+# Terminal 2: Start frontend
+cd frontend
+npm start
+```
+
+#### Option 3: Streamlit Version (Legacy)
 ```bash
 streamlit run app.py
 ```
 
-2. Open your browser and go to `http://localhost:8501`
+## Usage
 
-3. Upload your invoice image and click "Extract GST Information"
+1. Open your browser to `http://localhost:3000`
+2. **Upload Invoice**: Drag & drop or browse to select your invoice image (JPG/PNG)
+3. **Process**: Click "Extract GST Information" to process with AI
+4. **Review**: Check the extracted GST information and calculations
+5. **Download**: Click "Download GSTR-1 CSV" to get your filing-ready file
 
-4. Review the extracted data and download the GSTR-1 CSV file
+## Frontend Features
+
+### Modern UI Components
+- **Drag & Drop Upload**: Intuitive file upload with preview
+- **Real-time Processing**: Live status updates during extraction
+- **Responsive Design**: Works on desktop, tablet, and mobile
+- **Beautiful Dashboard**: Clean, modern interface with Tailwind CSS
+
+### Key Components
+- `InvoiceUpload`: Handles file upload and preview
+- `GSTResults`: Displays extracted information and calculations
+- `Header/Footer`: Professional branding and navigation
+- `GSTResults`: Comprehensive results display with CSV download
+
+## API Endpoints
+
+### `GET /api/health`
+Health check endpoint
+
+### `POST /api/process-invoice`
+Process invoice image and extract GST information
+- **Request**: multipart/form-data with file field
+- **Response**: JSON with extracted data and GST calculations
+
+### `POST /api/download-csv`
+Download GSTR-1 CSV file
+- **Request**: JSON with GSTR-1 data
+- **Response**: CSV file download
 
 ## GST Logic Explanation
 
@@ -84,12 +152,41 @@ Example: `37AAAPL1234C1ZV` (Andhra Pradesh)
 
 ## Dependencies
 
-- **Streamlit**: Web application framework
+### Backend
+- **Flask**: REST API framework
+- **Flask-CORS**: Cross-origin resource sharing
 - **EasyOCR**: Optical Character Recognition
 - **OpenCV**: Image processing
 - **Pandas**: CSV generation and data manipulation
 - **Pillow**: Image handling
 - **NumPy**: Numerical operations
+
+### Frontend
+- **React**: Modern UI framework
+- **Tailwind CSS**: Utility-first CSS framework
+- **Axios**: HTTP client for API calls
+- **React Dropzone**: File upload component
+- **Lucide React**: Modern icon library
+
+## Development
+
+### Backend Development
+```bash
+# Start API server only
+python api_server.py
+```
+
+### Frontend Development
+```bash
+cd frontend
+npm start
+```
+
+### Building for Production
+```bash
+cd frontend
+npm run build
+```
 
 ## Notes
 
@@ -97,6 +194,20 @@ Example: `37AAAPL1234C1ZV` (Andhra Pradesh)
 - Always verify extracted information before GST filing.
 - GST rates and rules may vary based on product categories and applicable laws.
 - This is a simplified implementation suitable for demonstration purposes.
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Port already in use**: Change ports in `api_server.py` or React configuration
+2. **OCR not working**: Ensure EasyOCR models are downloaded (first run may take time)
+3. **CORS errors**: API server should handle these with Flask-CORS
+4. **Image upload fails**: Check file size and format (JPG/PNG only)
+
+### Performance Tips
+- Use clear, high-resolution invoice images
+- Ensure good lighting and minimal shadows in invoice photos
+- For batch processing, consider implementing queue management
 
 ## Disclaimer
 
