@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
-import io
-from PIL import Image
 import tempfile
 import os
+from PIL import Image
+
+# Import custom modules
 from utils.extractor import InvoiceExtractor
 from utils.gst_logic import GSTLogic
 
@@ -42,10 +43,10 @@ def main():
     
     # Create file uploader
     uploaded_files = st.file_uploader(
-        "Choose invoice images (JPG/PNG). You can select multiple files.",
-        type=['jpg', 'jpeg', 'png'],
+        "Choose invoice files (PDF/JPG/PNG). You can select multiple files.",
+        type=['pdf', 'jpg', 'jpeg', 'png'],
         accept_multiple_files=True,
-        help="Upload clear images of your GST invoices"
+        help="Upload clear images or PDFs of your GST invoices"
     )
     
     if uploaded_files:
@@ -68,11 +69,15 @@ def main():
                     col1, col2 = st.columns([1, 1])
                     
                     with col1:
-                        image = Image.open(uploaded_file)
-                        st.image(image, caption=uploaded_file.name, use_column_width=True)
+                        if uploaded_file.name.lower().endswith('.pdf'):
+                            st.info("📄 PDF Document Selected")
+                        else:
+                            image = Image.open(uploaded_file)
+                            st.image(image, caption=uploaded_file.name, use_column_width=True)
                         
-                    # Save uploaded file temporarily
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+                    # Save uploaded file temporarily with original extension
+                    file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
                         tmp_file.write(uploaded_file.getvalue())
                         tmp_file_path = tmp_file.name
                     
@@ -126,8 +131,7 @@ def main():
                             st.metric("Total GST", f"₹{gst_calc['total_gst']:.2f}")
                         
                         # Raw extracted text (for debugging)
-                        with st.expander("🔍 Raw Extracted Text"):
-                            st.text_area("Extracted Text", invoice_info.get('extracted_text', ''), height=200, key=f"raw_{i}")
+                        st.text_area("🔍 Raw Extracted Text", invoice_info.get('extracted_text', ''), height=200, key=f"raw_{i}")
                     
                     except Exception as e:
                         st.error(f"Error processing invoice: {str(e)}")

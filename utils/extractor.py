@@ -1,14 +1,18 @@
 import re
+import os
+import io
+import fitz # PyMuPDF
+from pdf2image import convert_from_path
 import easyocr
 import cv2
 import numpy as np
 from PIL import Image
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 
 class InvoiceExtractor:
     """
-    Extracts text and key information from invoice images using EasyOCR.
+    Extracts text and key information from invoice images or PDFs.
     """
 
     def __init__(self):
@@ -37,27 +41,67 @@ class InvoiceExtractor:
         return denoised
 
     # ---------------- TEXT EXTRACTION ----------------
-    def extract_text(self, image_path: str) -> str:
+    def extract_text(self, file_path: str) -> str:
         """
-        Extract text from invoice image.
+        Extract text from invoice (supports Image or PDF via Hybrid strategy).
         """
         try:
-            image = cv2.imread(image_path)
+            _, ext = os.path.splitext(file_path)
+            ext = ext.lower()
+            
+            # --- PDF HANDLING (Hybrid Approach) ---
+            if ext == '.pdf':
+                # 1. Attempt Native PDF Text Extraction (PyMuPDF)
+                doc = fitz.open(file_path)
+                native_text = ""
+                for page in doc:
+                    native_text += page.get_text() + " "
+                doc.close()
+                
+                # If we successfully extracted enough pure text (e.g. Tally/Stripe PDF)
+                if len(native_text.strip()) > 50:
+                    print("✅ Skipped OCR: Extracted text natively from PDF.")
+                    return native_text.upper()
+                
+                # 2. Fallback to OCR for Scanned PDFs
+                print("⚠️ Scanned PDF detected (no native text). Falling back to OCR.")
+                extracted_text = ""
+                
+                # Convert PDF pages to PIL Images
+                # Note: poppler must be installed on the system, otherwise this will fail
+                pages = convert_from_path(file_path, dpi=300)
+                
+                for page_img in pages:
+                    # Convert PIL image to numpy array for OpenCV/EasyOCR
+                    img_array = np.array(page_img)
+                    # Convert RGB to BGR (OpenCV default)
+                    if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                        img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                    
+                    processed = self.preprocess_image(img_array)
+                    results = self.reader.readtext(processed, detail=0)
+                    extracted_text += " ".join(results) + " "
+                
+                return extracted_text.upper()
 
-            if image is None:
-                pil_image = Image.open(image_path)
-                image = np.array(pil_image)
+            # --- STANDARD IMAGE HANDLING (JPG/PNG) ---
+            else:
+                image = cv2.imread(file_path)
 
-            processed = self.preprocess_image(image)
+                if image is None:
+                    pil_image = Image.open(file_path)
+                    image = np.array(pil_image)
+                    if len(image.shape) == 3 and image.shape[2] == 3:
+                        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-            results = self.reader.readtext(processed, detail=0)
+                processed = self.preprocess_image(image)
+                results = self.reader.readtext(processed, detail=0)
+                extracted_text = " ".join(results)
 
-            extracted_text = " ".join(results)
-
-            return extracted_text.upper()
+                return extracted_text.upper()
 
         except Exception as e:
-            print(f"OCR Error: {e}")
+            print(f"Extraction Error: {e}")
             return ""
 
     # ---------------- GSTIN EXTRACTION ----------------
@@ -176,88 +220,93 @@ class InvoiceExtractor:
     # ---------------- TOTAL AMOUNT EXTRACTION ----------------
     def extract_total_amount(self, text: str) -> Optional[float]:
         """
-        Extract total invoice amount intelligently from deeply nested or corrupted strings.
+        Extract total invoice amount by searching for keywords and then 
+        inspecting the immediate neighborhood for a valid currency format.
         """
-        # Look for explicit Total keywords + amounts nearby (handling spaces/corrupted chars)
-        # Note: Added `\s*` before the dot and inside digits in case OCR splits number 123.45 into 123 . 45
-        total_patterns = [
-            r'(?:TOTAL|GRAND\s*TOTAL|GRANDTOTAL|NET\s*AMOUNT|AMT).*?([\d\s,]+\s*\.\s*\d{2})',
-            r'AMOUNT.*?([\d\s,]+\s*\.\s*\d{2})',
-            r'[₹₹RSINR]\s*([\d\s,]+\s*\.\s*\d{2})'
-        ]
-        
-        all_amounts = []
-        
-        # Helper to clean spaced amounts
+        import re
+
         def clean_amt(s: str) -> float:
-            # First remove commas, then merge spaces if they act as separators implicitly
-            clean_str = re.sub(r'[,]', '', s).strip()
-            # If there's a space before the last two digits and no dot, assume it's a mangled decimal e.g. "968 00"
-            if '.' not in clean_str and ' ' in clean_str:
-                parts = clean_str.split(' ')
-                if len(parts[-1]) == 2:
+            # Remove everything except digits and dot
+            clean_str = re.sub(r'[^0-9.]', '', s.replace(',', ''))
+            try:
+                # If there are multiple dots, take the last one as decimal
+                if clean_str.count('.') > 1:
+                    parts = clean_str.split('.')
                     clean_str = "".join(parts[:-1]) + "." + parts[-1]
-            # Strip remaining spaces
-            return float(re.sub(r'[\s]', '', clean_str))
-        
-        # 1. First pass: explicit keyword matching
-        for pattern in total_patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                try:
-                    amount_str = match.group(2) if match.groups() and len(match.groups()) > 1 else match.group(1)
-                    amount = clean_amt(amount_str)
-                    if amount > 10:
-                        all_amounts.append(amount)
-                except:
+                return float(clean_str)
+            except ValueError:
+                return 0.0
+
+        # Patterns to find numbers that look like totals (digits with possible 2-decimal places)
+        # Supports Indian grouping (e.g. 1,05,200.00) and Western grouping (e.g. 105,200.00)
+        # The logic: matches strings of digits and commas, optionally ending with .xx
+        amount_regex = re.compile(r'(?<!\d)(?:\d[,]?)+\.\d{2}(?!\d)')
+
+        def find_best_amount_in_window(window: str) -> Optional[float]:
+            # Find all numbers in the window
+            matches = amount_regex.findall(window)
+            valid_amts = []
+            for m in matches:
+                val = clean_amt(m)
+                # Ignore values too small or those that look like HSN numbers
+                if 10 < val < 10000000: # 1 Crore limit
+                    valid_amts.append(val)
+            
+            # If multiple numbers exist in the window (e.g. "Total 1,05,200.00 balance 5,200.00")
+            # We assume the LARGEST one is the actual Total
+            return max(valid_amts) if valid_amts else None
+
+        # Priority 1: Grand Total keywords (usually unique and at the bottom)
+        grand_total_keywords = [r'GRAND\s*TOTAL', r'TOTAL\s*PAYABLE', r'NET\s*AMOUNT', r'PAYABLE\s*AMOUNT', r'TOTAL\s*DUE']
+        for kw in grand_total_keywords:
+            matches = list(re.finditer(kw, text, re.IGNORECASE))
+            if matches:
+                # Take the last one
+                match = matches[-1]
+                # Look at the 60 characters following the keyword
+                window = text[match.end():match.end()+100]
+                amt = find_best_amount_in_window(window)
+                if amt: return amt
+
+        # Priority 2: Generic "Total"
+        # We use word boundaries to avoid matching "Total Sale" or "Total Tax"
+        total_matches = list(re.finditer(r'\bTOTAL\b', text, re.IGNORECASE))
+        if total_matches:
+            for match in reversed(total_matches):
+                window = text[match.end():match.end()+100]
+                # Skip if window contains "Tax" or "Sale" immediately
+                if re.search(r'^\s*(?:TAX|SALE|QTY|UNIT|PRICE)', window, re.IGNORECASE):
                     continue
-        
-        # 2. Second pass: aggressive floating point extraction towards the end of document
-        # Most totals exist in the last 20% of the text.
-        end_text_segment = text[-int(len(text)*0.3):]
-        numbers = re.findall(r'[\d\s,]+\s*\.\s*\d{2}', end_text_segment)
-        if numbers:
-            for n in numbers:
-                try:
-                    amt = clean_amt(n)
-                    if amt > 10:
-                        all_amounts.append(amt)
-                except:
-                    pass
+                amt = find_best_amount_in_window(window)
+                if amt: return amt
+
+        # Priority 3: "Amount" or "Amt" - more restrictive context
+        amt_keywords = [r'\bAMOUNT\b', r'\bAMT\b']
+        for kw in amt_keywords:
+            matches = list(re.finditer(kw, text, re.IGNORECASE))
+            if matches:
+                for match in reversed(matches):
+                    # For "Amount", we check if it's likely a header by looking for siblings
+                    window_before = text[max(0, match.start()-50):match.start()]
+                    if "HSN" in window_before or "Qty" in window_before or "Description" in window_before:
+                        continue # Skip table header
                     
-        # 3. Third pass: aggregate all floating numbers in document
-        if not all_amounts:
-            numbers = re.findall(r'[\d,]+\.\d{2}', text)
-            if numbers:
-                for n in numbers:
-                    try:
-                        amt = clean_amt(n)
-                        if amt > 10:
-                            all_amounts.append(amt)
-                    except:
-                        pass
-                        
-        # 4. Super aggressive fallback: find space-separated numbers like "968 00" next to "TOTAL"
-        fallback_pattern = r'(?:TOTAL|GRAND\s+TOTAL)\s+[^\d]*(\d+)\s+(\d{2})\b'
-        match = re.search(fallback_pattern, text, re.IGNORECASE)
-        if match:
-            all_amounts.append(float(f"{match.group(1)}.{match.group(2)}"))
-            
-        # 5. Deal with extreme OCR symbol injections separating TOTAL from Amount like "GRANDTOTAL {19,854.X0"
-        emergency_pattern = r'(?:TOTAL|GRANDTOTAL).*?([\d,]{2,})[\.\sX]*(\d{2})'
-        match = re.search(emergency_pattern, text, re.IGNORECASE)
-        if match:
-             amt = float(f"{match.group(1).replace(',','')}.{match.group(2)}")
-             if amt > 10: all_amounts.append(amt)
+                    window = text[match.end():match.end()+100]
+                    amt = find_best_amount_in_window(window)
+                    if amt: return amt
+
+        # Fallback: Just find the largest number in the last 30% of the document
+        end_text = text[-int(len(text)*0.3):] if len(text) > 100 else text
+        amounts = []
+        for m in amount_regex.findall(end_text):
+            val = clean_amt(m)
+            if 10 < val < 10000000 and '.' in m: # Require decimal for fallback confidence
+                amounts.append(val)
         
-        if all_amounts:
-            # Safely assume the MAX number found in a document typically represents the Total
-            return max(all_amounts)
-            
-        return None
+        return max(amounts) if amounts else None
 
     # ---------------- MAIN EXTRACTION FUNCTION ----------------
-    def extract_invoice_info(self, image_path: str) -> Dict[str, any]:
+    def extract_invoice_info(self, image_path: str) -> Dict[str, Any]:
         """
         Extract all invoice information.
         """
